@@ -5,6 +5,7 @@ import collections
 import dateutil.parser
 import dateutil.tz
 import requests
+import simplejson
 
 
 KM_PER_MILE = 1.609344
@@ -15,7 +16,7 @@ help_text = 'Show the current status of your vehicle.'
 def configure_parser(parser):
     add_vehicle_args(parser)
     parser.add_argument('--km', help='Give distances in kilometers (default is miles)', action='store_true')
-
+    parser.add_argument('--json', help='Output status in JSON format', action='store_true')
 
 def wrap_unavailable(obj, method):
     wrapper = collections.defaultdict(lambda: 'Unavailable')
@@ -28,24 +29,38 @@ def wrap_unavailable(obj, method):
 
     return wrapper
 
+def calculate_range(status):
+    
+    range_hvac_off = status['rangeHvacOff']
+
+    if status.get('_unavailable', False):
+        return range_hvac_off
+    else:
+        if 'rangeHvacOff' in status:
+            return range_hvac_off
+
+            
+def km_to_miles(km):
+    return round(km / KM_PER_MILE, 2) 
 
 def run(parsed_args):
     v = get_vehicle(parsed_args)
 
     status = wrap_unavailable(v, 'battery_status')
     # {'lastUpdateTime': '2019-07-12T00:38:01Z', 'chargePower': 2, 'instantaneousPower': 6600, 'plugStatus': 1, 'chargeStatus': 1, 'batteryLevel': 28, 'rangeHvacOff': 64, 'timeRequiredToFullSlow': 295}
+    
+    range_km = calculate_range(status)
+
+    if parsed_args.km:
+        range_text = '{} km'.format(range_km)
+    else:    
+        range_text = '{} miles'.format(km_to_miles(range_km))
+
     if status.get('_unavailable', False):
         plugged_in, charging = False, False
-        range_text = status['rangeHvacOff']
     else:
         plugged_in, charging = status.get('plugStatus', 0) > 0, status.get('chargeStatus', 0) > 0
-        if 'rangeHvacOff' in status:
-            if parsed_args.km:
-                range_text = '{:.1f} km'.format(status['rangeHvacOff'])
-            else:
-                range_text = '{:.1f} miles'.format(status['rangeHvacOff'] / KM_PER_MILE)
-        else:
-            range_text = status['rangeHvacOff']  # Fall back to default value
+
 
     try:
         charge_mode = v.charge_mode()
@@ -89,6 +104,8 @@ def run(parsed_args):
     except ValueError:
         update_time = status['lastUpdateTime']
 
+
+
     vehicle_table = [
         ["Battery level", "{}%".format(status['batteryLevel'])],
         ["Range estimate", range_text],
@@ -105,8 +122,20 @@ def run(parsed_args):
         ['Updated at', update_time]
     ]
 
-    print(
-        tabulate(
-            [v for v in vehicle_table if v is not None]
-        )
-    )
+    if parsed_args.json:
+        json = {}
+        json['batteryPercentage'] = status['batteryLevel']
+        json['rangeEstimateKm'] = range_km
+        json['rangeEstimateMiles'] = km_to_miles(range_km)
+        json['isPluggedIn'] = True if plugged_in else False
+        json['charging'] = True if charging else False
+        json['externalTemperature'] = external_temp
+
+        print(json)
+
+    else:
+        print(
+            tabulate(
+                [v for v in vehicle_table if v is not None]
+                )
+            )
